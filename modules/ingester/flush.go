@@ -156,28 +156,30 @@ func (i *Ingester) sweepInstance(instance *instance, immediate bool) {
 		return
 	}
 
-	// see if it's ready to cut a block
-	blockID, err := instance.CutBlockIfReady(i.cfg.MaxBlockDuration, i.cfg.MaxBlockBytes, immediate)
-	if err != nil {
-		level.Error(log.WithUserID(instance.instanceID, log.Logger)).Log("msg", "failed to cut block", "err", err)
-		return
-	}
+	for _, token := range i.tokens {
+		// see if it's ready to cut a block
+		blockID, err := instance.CutBlockIfReady(i.cfg.MaxBlockDuration, i.cfg.MaxBlockBytes, immediate, token)
+		if err != nil {
+			level.Error(log.WithUserID(instance.instanceID, log.Logger)).Log("msg", "failed to cut block", "err", err)
+			return
+		}
 
-	if blockID != uuid.Nil {
-		level.Info(log.Logger).Log("msg", "head block cut. enqueueing flush op", "userid", instance.instanceID, "block", blockID)
-		// jitter to help when flushing many instances at the same time
-		// no jitter if immediate (initiated via /flush handler for example)
-		i.enqueue(&flushOp{
-			kind:    opKindComplete,
-			userID:  instance.instanceID,
-			blockID: blockID,
-		}, !immediate)
-	}
+		if blockID != uuid.Nil {
+			level.Info(log.Logger).Log("msg", "head block cut. enqueueing flush op", "userid", instance.instanceID, "block", blockID)
+			// jitter to help when flushing many instances at the same time
+			// no jitter if immediate (initiated via /flush handler for example)
+			i.enqueue(&flushOp{
+				kind:    opKindComplete,
+				userID:  instance.instanceID,
+				blockID: blockID,
+			}, !immediate)
+		}
 
-	// dump any blocks that have been flushed for awhile
-	err = instance.ClearFlushedBlocks(i.cfg.CompleteBlockTimeout)
-	if err != nil {
-		level.Error(log.WithUserID(instance.instanceID, log.Logger)).Log("msg", "failed to complete block", "err", err)
+		// dump any blocks that have been flushed for awhile
+		err = instance.ClearFlushedBlocks(i.cfg.CompleteBlockTimeout)
+		if err != nil {
+			level.Error(log.WithUserID(instance.instanceID, log.Logger)).Log("msg", "failed to complete block", "err", err)
+		}
 	}
 }
 

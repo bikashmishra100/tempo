@@ -56,7 +56,7 @@ func TestInstance(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int(i.traceCount.Load()), len(i.traces))
 
-	blockID, err := i.CutBlockIfReady(0, 0, false)
+	blockID, err := i.CutBlockIfReady(0, 0, false, 0)
 	require.NoError(t, err, "unexpected error cutting block")
 	require.NotEqual(t, blockID, uuid.Nil)
 
@@ -79,7 +79,7 @@ func TestInstance(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, i.completeBlocks, 0)
 
-	err = i.resetHeadBlock()
+	err = i.resetHeadBlock(0)
 	require.NoError(t, err, "unexpected error resetting block")
 
 	require.Equal(t, int(i.traceCount.Load()), len(i.traces))
@@ -134,7 +134,7 @@ func TestInstanceFind(t *testing.T) {
 
 	queryAll(t, i, ids, traces)
 
-	blockID, err := i.CutBlockIfReady(0, 0, true)
+	blockID, err := i.CutBlockIfReady(0, 0, true, 0)
 	require.NoError(t, err)
 	require.NotEqual(t, blockID, uuid.Nil)
 
@@ -205,7 +205,7 @@ func TestInstanceDoesNotRace(t *testing.T) {
 	})
 
 	go concurrent(func() {
-		blockID, _ := i.CutBlockIfReady(0, 0, false)
+		blockID, _ := i.CutBlockIfReady(0, 0, false, 0)
 		if blockID != uuid.Nil {
 			err := i.CompleteBlock(blockID)
 			require.NoError(t, err, "unexpected error completing block")
@@ -483,7 +483,7 @@ func TestInstanceCutBlockIfReady(t *testing.T) {
 			err := instance.CutCompleteTraces(0, true)
 			require.NoError(t, err)
 
-			blockID, err := instance.CutBlockIfReady(tc.maxBlockLifetime, tc.maxBlockBytes, tc.immediate)
+			blockID, err := instance.CutBlockIfReady(tc.maxBlockLifetime, tc.maxBlockBytes, tc.immediate, 0)
 			require.NoError(t, err)
 
 			err = instance.CompleteBlock(blockID)
@@ -577,7 +577,7 @@ func TestInstanceFailsLargeTracesEvenAfterFlushing(t *testing.T) {
 	require.Contains(t, err.Error(), (newTraceTooLargeError(id, maxTraceBytes, 5)).Error())
 
 	// Cut block and then pushing works again
-	_, err = i.CutBlockIfReady(0, 0, true)
+	_, err = i.CutBlockIfReady(0, 0, true, 0)
 	require.NoError(t, err)
 	err = pushFn(maxTraceBytes)
 	require.NoError(t, err)

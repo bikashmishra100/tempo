@@ -150,8 +150,10 @@ func (i *instance) searchWAL(ctx context.Context, p search.Pipeline, sr *search.
 	}
 
 	// head block
-	sr.StartWorker()
-	go searchFunc(i.searchHeadBlock)
+	for _, searchHeadBlock := range i.searchHeadBlocks {
+		sr.StartWorker()
+		go searchFunc(searchHeadBlock)
+	}
 
 	// completing blocks
 	for _, e := range i.searchAppendBlocks {
@@ -317,9 +319,11 @@ func (i *instance) visitSearchableBlocksWAL(ctx context.Context, visitFn func(bl
 		return visitFn(entry.b)
 	}
 
-	err := visitUnderLock(i.searchHeadBlock)
-	if err != nil {
-		return err
+	for _, searchHeadBlock := range i.searchHeadBlocks {
+		err := visitUnderLock(searchHeadBlock)
+		if err != nil {
+			return err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err

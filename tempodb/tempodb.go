@@ -19,6 +19,7 @@ import (
 	cortex_cache "github.com/cortexproject/cortex/pkg/chunk/cache"
 	log_util "github.com/cortexproject/cortex/pkg/util/log"
 	"github.com/grafana/tempo/pkg/boundedwaitgroup"
+	"github.com/grafana/tempo/pkg/util"
 	"github.com/grafana/tempo/tempodb/backend"
 	"github.com/grafana/tempo/tempodb/backend/azure"
 	"github.com/grafana/tempo/tempodb/backend/cache"
@@ -259,6 +260,7 @@ func (rw *readerWriter) CompleteBlockWithBackend(ctx context.Context, block *wal
 		return nil, errors.Wrap(err, "error completing compactor block")
 	}
 
+	fmt.Println("Hashes", fmt.Sprintf("%010d", newBlock.BlockMeta().MinHashID), fmt.Sprintf("%010d", newBlock.BlockMeta().MaxHashID))
 	backendBlock, err := encoding.NewBackendBlock(newBlock.BlockMeta(), r)
 	if err != nil {
 		return nil, errors.Wrap(err, "error creating creating backend block")
@@ -532,6 +534,11 @@ func includeBlock(b *backend.BlockMeta, id common.ID, blockStart []byte, blockEn
 	// check block is in shard boundaries
 	// blockStartBytes <= blockIDBytes <= blockEndBytes
 	if bytes.Compare(blockIDBytes, blockStart) == -1 || bytes.Compare(blockIDBytes, blockEnd) == 1 {
+		return false
+	}
+
+	hash := util.TokenForTraceID(id)
+	if (b.MaxHashID < hash || b.MinHashID > hash) && (b.MinHashID != 0 && b.MaxHashID != 0) {
 		return false
 	}
 

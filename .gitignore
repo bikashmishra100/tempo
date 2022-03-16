@@ -11,3 +11,10 @@
 .DS_Store
 /tempodb/encoding/benchmark_block
 /cmd/tempo-serverless/vendor/
+/tempodb/encoding/benchmark_block
+.bash_history
+.cache
+/cmd/tempo/config.yaml
+/cmd/tempo-serverless/vendor/
+/cmd/tempo/tempowal
+/cmd/tempo/tempostorage

@@ -110,7 +110,7 @@ func TestInstanceSearch(t *testing.T) {
 	checkEqual(t, ids, sr)
 
 	// Test after cutting new headblock
-	blockID, err := i.CutBlockIfReady(0, 0, true)
+	blockID, err := i.CutBlockIfReady(0, 0, true, 0)
 	require.NoError(t, err)
 	assert.NotEqual(t, blockID, uuid.Nil)
 
@@ -225,7 +225,7 @@ func TestInstanceSearchDoesNotRace(t *testing.T) {
 
 	go concurrent(func() {
 		// Cut wal, complete, delete wal, then flush
-		blockID, _ := i.CutBlockIfReady(0, 0, true)
+		blockID, _ := i.CutBlockIfReady(0, 0, true, 0)
 		if blockID != uuid.Nil {
 			err := i.CompleteBlock(blockID)
 			require.NoError(t, err)
@@ -309,7 +309,7 @@ func TestWALBlockDeletedDuringSearch(t *testing.T) {
 	err = i.CutCompleteTraces(0, true)
 	require.NoError(t, err)
 
-	blockID, err := i.CutBlockIfReady(0, 0, true)
+	blockID, err := i.CutBlockIfReady(0, 0, true, 0)
 	require.NoError(t, err)
 
 	go concurrent(func() {
@@ -386,7 +386,7 @@ func TestInstanceSearchMetrics(t *testing.T) {
 	require.Equal(t, uint32(1), m.InspectedBlocks) // 1 head block
 
 	// Test after cutting new headblock
-	blockID, err := i.CutBlockIfReady(0, 0, true)
+	blockID, err := i.CutBlockIfReady(0, 0, true, 0)
 	require.NoError(t, err)
 	m = search()
 	require.Equal(t, numTraces, m.InspectedTraces)
@@ -461,7 +461,7 @@ func BenchmarkInstanceSearchUnderLoad(b *testing.B) {
 	go concurrent(func() {
 		// Slow this down to prevent "too many open files" error
 		time.Sleep(100 * time.Millisecond)
-		_, err := i.CutBlockIfReady(0, 0, true)
+		_, err := i.CutBlockIfReady(0, 0, true, 0)
 		require.NoError(b, err)
 	})
 

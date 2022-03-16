@@ -22,6 +22,7 @@ type Config struct {
 	MaxTraceIdle         time.Duration `yaml:"trace_idle_period"`
 	MaxBlockDuration     time.Duration `yaml:"max_block_duration"`
 	MaxBlockBytes        uint64        `yaml:"max_block_bytes"`
+	BlockPerToken        bool          `yaml:"block_per_token"`
 	CompleteBlockTimeout time.Duration `yaml:"complete_block_timeout"`
 	OverrideRingKey      string        `yaml:"override_ring_key"`
 }
@@ -42,6 +43,7 @@ func (cfg *Config) RegisterFlagsAndApplyDefaults(prefix string, f *flag.FlagSet)
 	f.DurationVar(&cfg.MaxBlockDuration, prefix+".max-block-duration", time.Hour, "Maximum duration which the head block can be appended to before cutting it.")
 	f.Uint64Var(&cfg.MaxBlockBytes, prefix+".max-block-bytes", 1024*1024*1024, "Maximum size of the head block before cutting it.")
 	f.DurationVar(&cfg.CompleteBlockTimeout, prefix+".complete-block-timeout", 3*tempodb.DefaultBlocklistPoll, "Duration to keep blocks in the ingester after they have been flushed.")
+	f.BoolVar(&cfg.BlockPerToken, prefix+".block_per_token", false, "Whether blocks should be created on per token basis")
 
 	hostname, err := os.Hostname()
 	if err != nil {

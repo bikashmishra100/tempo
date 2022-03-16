@@ -57,7 +57,7 @@ const (
 	inputBlocks  = 2
 	outputBlocks = 1
 
-	compactionCycle = 500 * time.Millisecond
+	compactionCycle = 5000 * time.Millisecond
 
 	DefaultFlushSizeBytes uint32 = 30 * 1024 * 1024 // 30 MiB
 
@@ -271,6 +271,7 @@ func appendBlock(rw *readerWriter, tracker backend.AppendTracker, block *encodin
 func finishBlock(rw *readerWriter, tracker backend.AppendTracker, block *encoding.StreamingBlock) error {
 	level.Info(rw.logger).Log("msg", "writing compacted block", "block", fmt.Sprintf("%+v", block.BlockMeta()))
 
+	fmt.Println("Compaction Hashes", fmt.Sprintf("%010d", block.BlockMeta().MinHashID), fmt.Sprintf("%010d", block.BlockMeta().MaxHashID))
 	w := rw.getWriterForBlock(block.BlockMeta(), time.Now())
 
 	bytesFlushed, err := block.Complete(context.TODO(), tracker, w)

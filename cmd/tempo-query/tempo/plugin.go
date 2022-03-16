@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/jsonpb"
+	"github.com/gogo/protobuf/proto"
 	"github.com/grafana/tempo/pkg/tempopb"
 	"github.com/opentracing/opentracing-go"
 	ot_log "github.com/opentracing/opentracing-go/log"
@@ -22,6 +23,7 @@ import (
 
 	ot_jaeger "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/jaeger"
 	"go.opentelemetry.io/collector/model/otlp"
+	ot_pdata "go.opentelemetry.io/collector/model/pdata"
 )
 
 const (
@@ -52,7 +54,7 @@ func (b *Backend) GetDependencies(ctx context.Context, endTs time.Time, lookback
 }
 
 func (b *Backend) GetTrace(ctx context.Context, traceID jaeger.TraceID) (*jaeger.Trace, error) {
-	url := fmt.Sprintf("http://%s/api/traces/%s", b.tempoBackend, traceID)
+	url := fmt.Sprintf("https://opentracing-prd-trace-search.techpiprdusw2.iks2.a.intuit.com/traces/%s", traceID)
 
 	span, ctx := opentracing.StartSpanFromContext(ctx, "tempo-query.GetTrace")
 	defer span.Finish()
@@ -75,18 +77,20 @@ func (b *Backend) GetTrace(ctx context.Context, traceID jaeger.TraceID) (*jaeger
 		return nil, jaeger_spanstore.ErrTraceNotFound
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error reading response from tempo: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s", body)
+		return nil, fmt.Errorf("%s", resp.Status)
 	}
 
-	otTrace, err := otlp.NewProtobufTracesUnmarshaler().UnmarshalTraces(body)
-	if err != nil {
-		return nil, fmt.Errorf("error unmarshalling body to otlp trace %v: %w", traceID, err)
+	var traces tempopb.Trace
+	if err := jsonpb.Unmarshal(resp.Body, &traces); err != nil {
+		return nil, fmt.Errorf("error unmarshalling response from tempo: %w", err)
+	}
+
+	var otTrace ot_pdata.Traces
+	if traceData, err := proto.Marshal(&traces); err != nil {
+		return nil, fmt.Errorf("error converting to proto from tempo: %w", err)
+	} else if otTrace, err = otlp.NewProtobufTracesUnmarshaler().UnmarshalTraces(traceData); err != nil {
+		return nil, fmt.Errorf("error unmarshalling from proto to jaeger: %w", err)
 	}
 
 	jaegerBatches, err := ot_jaeger.InternalTracesToJaegerProto(otTrace)

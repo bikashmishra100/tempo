@@ -2,6 +2,7 @@ package tempodb
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -78,7 +79,7 @@ func newTimeWindowBlockSelector(blocklist []*backend.BlockMeta, maxCompactionRan
 			// inside active window.
 			// Group by compaction level and window.
 			// Choose lowest compaction level and most recent windows first.
-			entry.group = fmt.Sprintf("A-%v-%016X", b.CompactionLevel, age)
+			entry.group = fmt.Sprintf("A-%v-%v-%010d", b.CompactionLevel, age, b.MinHashID/uint32(math.Pow(2, 20)))
 
 			// Within group choose smallest blocks first.
 			entry.order = fmt.Sprintf("%016X", entry.meta.TotalObjects)
@@ -87,7 +88,7 @@ func newTimeWindowBlockSelector(blocklist []*backend.BlockMeta, maxCompactionRan
 		} else {
 			// outside active window.
 			// Group by window only.  Choose most recent windows first.
-			entry.group = fmt.Sprintf("B-%016X", age)
+			entry.group = fmt.Sprintf("B-%v-%010d", age, b.MinHashID/uint32(math.Pow(2, 20)))
 
 			// Within group chose lowest compaction lvl and smallest blocks first.
 			entry.order = fmt.Sprintf("%v-%016X", b.CompactionLevel, entry.meta.TotalObjects)
@@ -108,6 +109,11 @@ func newTimeWindowBlockSelector(blocklist []*backend.BlockMeta, maxCompactionRan
 		}
 		return ei.group < ej.group
 	})
+
+	fmt.Println(time.Now())
+	for _, e := range twbs.entries {
+		fmt.Println(len(blocklist), e.meta.BlockID.String(), e.group, e.order, e.hash)
+	}
 
 	return twbs
 }

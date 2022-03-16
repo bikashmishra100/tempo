@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
+	"sort"
 	"sync"
 	"time"
 
@@ -90,14 +91,15 @@ type instance struct {
 	tracesMtx   sync.Mutex
 	traces      map[uint32]*liveTrace
 	largeTraces map[uint32]int // maxBytes that trace exceeded
+	tokens      []uint32
 	traceCount  atomic.Int32
 
 	blocksMtx        sync.RWMutex
-	headBlock        *wal.AppendBlock
+	headBlocks       map[uint32]*wal.AppendBlock
 	completingBlocks []*wal.AppendBlock
 	completeBlocks   []*wal.LocalBlock
 
-	searchHeadBlock      *searchStreamingBlockEntry
+	searchHeadBlocks     map[uint32]*searchStreamingBlockEntry
 	searchAppendBlocks   map[*wal.AppendBlock]*searchStreamingBlockEntry
 	searchCompleteBlocks map[*wal.LocalBlock]*searchLocalBlockEntry
 
@@ -130,14 +132,15 @@ func newInstance(instanceID string, limiter *Limiter, writer tempodb.Writer, l *
 	i := &instance{
 		traces:               map[uint32]*liveTrace{},
 		largeTraces:          map[uint32]int{},
+		headBlocks:           map[uint32]*wal.AppendBlock{},
+		searchHeadBlocks:     map[uint32]*searchStreamingBlockEntry{},
 		searchAppendBlocks:   map[*wal.AppendBlock]*searchStreamingBlockEntry{},
 		searchCompleteBlocks: map[*wal.LocalBlock]*searchLocalBlockEntry{},
-
-		instanceID:         instanceID,
-		tracesCreatedTotal: metricTracesCreatedTotal.WithLabelValues(instanceID),
-		bytesReceivedTotal: metricBytesReceivedTotal,
-		limiter:            limiter,
-		writer:             writer,
+		instanceID:           instanceID,
+		tracesCreatedTotal:   metricTracesCreatedTotal.WithLabelValues(instanceID),
+		bytesReceivedTotal:   metricBytesReceivedTotal,
+		limiter:              limiter,
+		writer:               writer,
 
 		local:       l,
 		localReader: backend.NewReader(l),
@@ -145,11 +148,16 @@ func newInstance(instanceID string, limiter *Limiter, writer tempodb.Writer, l *
 
 		hash: fnv.New32(),
 	}
-	err := i.resetHeadBlock()
+	err := i.resetHeadBlock(0)
 	if err != nil {
 		return nil, err
 	}
 	return i, nil
+}
+
+func (i *instance) SetIngesterTokens(tokens []uint32) {
+	i.tokens = append([]uint32{0}, tokens...)
+	fmt.Println("Tokens", i.tokens)
 }
 
 func (i *instance) PushBytesRequest(ctx context.Context, req *tempopb.PushBytesRequest) error {
@@ -243,21 +251,21 @@ func (i *instance) CutCompleteTraces(cutoff time.Duration, immediate bool) error
 
 // CutBlockIfReady cuts a completingBlock from the HeadBlock if ready
 // Returns a bool indicating if a block was cut along with the error (if any).
-func (i *instance) CutBlockIfReady(maxBlockLifetime time.Duration, maxBlockBytes uint64, immediate bool) (uuid.UUID, error) {
+func (i *instance) CutBlockIfReady(maxBlockLifetime time.Duration, maxBlockBytes uint64, immediate bool, token uint32) (uuid.UUID, error) {
 	i.blocksMtx.Lock()
 	defer i.blocksMtx.Unlock()
 
-	if i.headBlock == nil || i.headBlock.DataLength() == 0 {
+	if i.headBlocks[token] == nil || i.headBlocks[token].DataLength() == 0 {
 		return uuid.Nil, nil
 	}
 
 	now := time.Now()
-	if i.lastBlockCut.Add(maxBlockLifetime).Before(now) || i.headBlock.DataLength() >= maxBlockBytes || immediate {
-		completingBlock := i.headBlock
+	if i.lastBlockCut.Add(maxBlockLifetime).Before(now) || i.headBlocks[token].DataLength() >= maxBlockBytes || immediate {
+		completingBlock := i.headBlocks[token]
 
 		i.completingBlocks = append(i.completingBlocks, completingBlock)
 
-		err := i.resetHeadBlock()
+		err := i.resetHeadBlock(token)
 		if err != nil {
 			return uuid.Nil, fmt.Errorf("failed to resetHeadBlock: %w", err)
 		}
@@ -400,7 +408,6 @@ func (i *instance) ClearFlushedBlocks(completeBlockTimeout time.Duration) error 
 }
 
 func (i *instance) FindTraceByID(ctx context.Context, id []byte) (*tempopb.Trace, error) {
-	var err error
 	var completeTrace *tempopb.Trace
 
 	// live traces
@@ -422,19 +429,21 @@ func (i *instance) FindTraceByID(ctx context.Context, id []byte) (*tempopb.Trace
 	i.blocksMtx.RLock()
 	defer i.blocksMtx.RUnlock()
 
-	// headBlock
-	foundBytes, err := i.headBlock.Find(id, model.ObjectCombiner)
-	if err != nil {
-		return nil, fmt.Errorf("headBlock.Find failed: %w", err)
-	}
-	completeTrace, err = model.CombineForRead(foundBytes, i.headBlock.Meta().DataEncoding, completeTrace)
-	if err != nil {
-		return nil, fmt.Errorf("headblock unmarshal failed in FindTraceByID")
+	// headBlocks
+	for _, headBlockUnit := range i.headBlocks {
+		foundBytes, err := headBlockUnit.Find(id, model.ObjectCombiner)
+		if err != nil {
+			return nil, fmt.Errorf("headBlock.Find failed: %w", err)
+		}
+		completeTrace, err = model.CombineForRead(foundBytes, headBlockUnit.Meta().DataEncoding, completeTrace)
+		if err != nil {
+			return nil, fmt.Errorf("headblock unmarshal failed in FindTraceByID")
+		}
 	}
 
 	// completingBlock
 	for _, c := range i.completingBlocks {
-		foundBytes, err = c.Find(id, model.ObjectCombiner)
+		foundBytes, err := c.Find(id, model.ObjectCombiner)
 		if err != nil {
 			return nil, fmt.Errorf("completingBlock.Find failed: %w", err)
 		}
@@ -446,7 +455,7 @@ func (i *instance) FindTraceByID(ctx context.Context, id []byte) (*tempopb.Trace
 
 	// completeBlock
 	for _, c := range i.completeBlocks {
-		foundBytes, err = c.Find(ctx, id)
+		foundBytes, err := c.Find(ctx, id)
 		if err != nil {
 			return nil, fmt.Errorf("completeBlock.Find failed: %w", err)
 		}
@@ -502,37 +511,37 @@ func (i *instance) tokenForTraceID(id []byte) uint32 {
 }
 
 // resetHeadBlock() should be called under lock
-func (i *instance) resetHeadBlock() error {
+func (i *instance) resetHeadBlock(token uint32) error {
 
 	// Clear large traces when cutting block
 	i.tracesMtx.Lock()
 	i.largeTraces = map[uint32]int{}
 	i.tracesMtx.Unlock()
 
-	oldHeadBlock := i.headBlock
+	oldHeadBlock := i.headBlocks[token]
 	var err error
 	newHeadBlock, err := i.writer.WAL().NewBlock(uuid.New(), i.instanceID, model.CurrentEncoding)
 	if err != nil {
 		return err
 	}
 
-	i.headBlock = newHeadBlock
+	i.headBlocks[token] = newHeadBlock
 	i.lastBlockCut = time.Now()
 
 	// Create search data wal file
-	f, version, enc, err := i.writer.WAL().NewFile(i.headBlock.BlockID(), i.instanceID, searchDir)
+	f, version, enc, err := i.writer.WAL().NewFile(i.headBlocks[token].BlockID(), i.instanceID, searchDir)
 	if err != nil {
 		return err
 	}
 
-	b, err := search.NewStreamingSearchBlockForFile(f, i.headBlock.BlockID(), version, enc)
+	b, err := search.NewStreamingSearchBlockForFile(f, i.headBlocks[token].BlockID(), version, enc)
 	if err != nil {
 		return err
 	}
-	if i.searchHeadBlock != nil {
-		i.searchAppendBlocks[oldHeadBlock] = i.searchHeadBlock
+	if i.searchHeadBlocks[token] != nil {
+		i.searchAppendBlocks[oldHeadBlock] = i.searchHeadBlocks[token]
 	}
-	i.searchHeadBlock = &searchStreamingBlockEntry{
+	i.searchHeadBlocks[token] = &searchStreamingBlockEntry{
 		b: b,
 	}
 	return nil
@@ -563,12 +572,23 @@ func (i *instance) writeTraceToHeadBlock(id common.ID, b []byte, searchData [][]
 	i.blocksMtx.Lock()
 	defer i.blocksMtx.Unlock()
 
-	err := i.headBlock.Append(id, b)
+	traceIDHash := i.tokenForTraceID(id)
+	index := sort.Search(len(i.tokens), func(x int) bool {
+		return i.tokens[x] > traceIDHash
+	})
+
+	ingesterToken := i.tokens[index-1]
+
+	if _, ok := i.headBlocks[ingesterToken]; !ok {
+		i.resetHeadBlock(ingesterToken)
+	}
+
+	err := i.headBlocks[ingesterToken].Append(id, b)
 	if err != nil {
 		return err
 	}
 
-	entry := i.searchHeadBlock
+	entry := i.searchHeadBlocks[ingesterToken]
 	if entry != nil {
 		// Don't take a write lock on the block here. It is safe
 		// for the appender to write to its file while a search

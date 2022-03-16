@@ -47,9 +47,11 @@ type Ingester struct {
 
 	cfg Config
 
-	instancesMtx sync.RWMutex
-	instances    map[string]*instance
-	readonly     bool
+	instancesMtx  sync.RWMutex
+	instances     map[string]*instance
+	tokens        []uint32
+	readonly      bool
+	blockPerToken bool
 
 	lifecycler   *ring.Lifecycler
 	store        storage.Store
@@ -67,11 +69,12 @@ type Ingester struct {
 // New makes a new Ingester.
 func New(cfg Config, store storage.Store, limits *overrides.Overrides, reg prometheus.Registerer) (*Ingester, error) {
 	i := &Ingester{
-		cfg:          cfg,
-		instances:    map[string]*instance{},
-		store:        store,
-		flushQueues:  flushqueues.New(cfg.ConcurrentFlushes, metricFlushQueueLength),
-		replayJitter: true,
+		cfg:           cfg,
+		instances:     map[string]*instance{},
+		store:         store,
+		flushQueues:   flushqueues.New(cfg.ConcurrentFlushes, metricFlushQueueLength),
+		replayJitter:  true,
+		blockPerToken: cfg.BlockPerToken,
 	}
 
 	i.local = store.WAL().LocalBackend()
@@ -79,6 +82,12 @@ func New(cfg Config, store storage.Store, limits *overrides.Overrides, reg prome
 	i.flushQueuesDone.Add(cfg.ConcurrentFlushes)
 	for j := 0; j < cfg.ConcurrentFlushes; j++ {
 		go i.flushLoop(j)
+	}
+
+	if i.blockPerToken {
+		if cfg.LifecyclerConfig.NumTokens > 10 {
+			cfg.LifecyclerConfig.NumTokens = 10
+		}
 	}
 
 	lc, err := ring.NewLifecycler(cfg.LifecyclerConfig, i, "ingester", cfg.OverrideRingKey, true, log.Logger, prometheus.WrapRegistererWithPrefix("cortex_", reg))
@@ -122,6 +131,27 @@ func (i *Ingester) starting(ctx context.Context) error {
 }
 
 func (i *Ingester) loop(ctx context.Context) error {
+	if i.blockPerToken {
+		for attempts := 0; attempts < 10; attempts++ {
+			time.Sleep(3 * time.Second)
+			if i.lifecycler.GetState() == ring.ACTIVE {
+				iRingDesc, err := i.lifecycler.KVStore.Get(ctx, i.lifecycler.RingKey)
+				if err != nil {
+					level.Info(log.Logger).Log("msg", "waiting for ingester registration", "err", err)
+					continue
+				} else if ringDesc, ok := iRingDesc.(*ring.Desc); ok {
+					if ingester, ok := ringDesc.Ingesters[i.lifecycler.ID]; ok {
+						i.tokens = ingester.Tokens
+						for _, instance := range i.instances {
+							instance.SetIngesterTokens(i.tokens)
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
 	flushTicker := time.NewTicker(i.cfg.FlushCheckPeriod)
 	defer flushTicker.Stop()
 
@@ -246,6 +276,7 @@ func (i *Ingester) getOrCreateInstance(instanceID string) (*instance, error) {
 		if err != nil {
 			return nil, err
 		}
+		inst.SetIngesterTokens(i.tokens)
 		i.instances[instanceID] = inst
 	}
 	return inst, nil

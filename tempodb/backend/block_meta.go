@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/grafana/tempo/pkg/util"
 )
 
 type CompactedBlockMeta struct {
@@ -16,6 +17,8 @@ type CompactedBlockMeta struct {
 type BlockMeta struct {
 	Version         string    `json:"format"`          // Version indicates the block format version. This includes specifics of how the indexes and data is stored
 	BlockID         uuid.UUID `json:"blockID"`         // Unique block id
+	MinHashID       uint32    `json:"minHashID"`       // Minimum hash id stored in this block
+	MaxHashID       uint32    `json:"maxHashID"`       // Maximum hash id stored in this block
 	MinID           []byte    `json:"minID"`           // Minimum object id stored in this block
 	MaxID           []byte    `json:"maxID"`           // Maximum object id stored in this block
 	TenantID        string    `json:"tenantID"`        // ID of tehant to which this block belongs
@@ -36,6 +39,8 @@ func NewBlockMeta(tenantID string, blockID uuid.UUID, version string, encoding E
 	b := &BlockMeta{
 		Version:      version,
 		BlockID:      blockID,
+		MinHashID:    0,
+		MaxHashID:    0,
 		MinID:        []byte{},
 		MaxID:        []byte{},
 		TenantID:     tenantID,
@@ -57,6 +62,15 @@ func (b *BlockMeta) ObjectAdded(id []byte) {
 
 	if len(b.MaxID) == 0 || bytes.Compare(id, b.MaxID) == 1 {
 		b.MaxID = id
+	}
+
+	hash := util.TokenForTraceID(id)
+	if b.MinHashID == 0 || b.MinHashID > hash {
+		b.MinHashID = hash
+	}
+
+	if b.MinHashID == 0 || b.MaxHashID < hash {
+		b.MaxHashID = hash
 	}
 
 	b.TotalObjects++
